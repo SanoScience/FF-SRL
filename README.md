@@ -7,7 +7,7 @@ advanced XPBD simulation of deformable tissue. We showed that FF-SRL can signifi
 process for surgical tasks, achieving higher frame-rates and faster training time than other available simulators. We also
 demonstrated the scalability and efficiency of our simulation environment, which can run on a single low-end GPU device.
 
-![](pipelineV2-1.png)
+![](images/pipelineV2-1.png)
 
 ## Abstract
 Robotic surgery is a rapidly developing field that can greatly benefit from the automation of surgical tasks. However, training techniques such as Reinforcement Learning (RL) require a high number of task repetitions, which are especially unsafe and impractical to perform on real surgical systems. This
