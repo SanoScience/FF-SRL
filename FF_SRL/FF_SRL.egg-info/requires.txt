@@ -1,0 +1,7 @@
+numpy
+warp-lang==0.10.1
+usd-core
+trimesh
+climage
+torchwindow
+matplotlib

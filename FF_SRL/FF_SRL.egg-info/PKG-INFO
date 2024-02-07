@@ -1,0 +1,21 @@
+Metadata-Version: 2.1
+Name: FF-SRL
+Version: 0.0.1
+Summary: A Python framework for high-performance differentiable medical simulation
+Home-page: https://github.com/SanoScience/FF-SRL
+Author: Michał Naskręt
+Author-email: mnaskret@gmail.com
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: License :: Other/Proprietary License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: warp-lang==0.10.1
+Requires-Dist: usd-core
+Requires-Dist: trimesh
+Requires-Dist: climage
+Requires-Dist: torchwindow
+Requires-Dist: matplotlib
