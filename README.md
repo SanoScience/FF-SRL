@@ -18,4 +18,4 @@ GPU. This avoids typical bottlenecks associated with data transfer between the C
  ###  <u> **The code will be released after paper acceptance.** </u>
 
 ## Citing
-**Paper submitted to icra 2024-still under review.**
+**Paper submitted to iros 2024-still under review.**
