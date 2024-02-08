@@ -27,6 +27,8 @@ pip install -e .
 ```
 
 ## Examples
+![liver8Low](https://github.com/SanoScience/FF-SRL/assets/4333336/8978887d-9ed1-4389-be54-082068e6e77a)
+
 An example of liver simulation with a laparoscope can be accessed here:
 ```
 cd FF-SRL/FF_SRL/FF_SRL/tests/
