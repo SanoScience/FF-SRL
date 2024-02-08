@@ -1,6 +1,6 @@
 # FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning
 
-This repository contains rhe implemenation of the project "FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning"
+This repository contains the implemenation of the project "FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning"
 
 In this paper, we presented FF-SRL, a GPU-based simulation environment for robotic surgery that leverages an
 advanced XPBD simulation of deformable tissue. We showed that FF-SRL can significantly speed up the RL training
@@ -16,6 +16,15 @@ GPU. This avoids typical bottlenecks associated with data transfer between the C
 
 ## Content
  ###  <u> **The full code will be released after paper acceptance.** </u>
+
+## Features
+* Soft-body simulation engine creted with XPBD solver,
+* Simulation code written in [nVidia warp](https://github.com/NVIDIA/warp) allowing for fast execution on GPUs and interoperability with e.g. PyTorch for Reinforcement Learning,
+* The simulation is written in data-oriented way (data for multiple environments are kept in the same arrays),
+* Rendering with simple yet fast ray casting on GPU,
+* Bounding Volume Hierarchy creation,
+* Scene creation with nVidia OmniVerse (tools for that will be added in feature)
+* Instrument grasping implemented and simple topological modifications to be added (cutting, heating),
 
 ## Installation
 ```
