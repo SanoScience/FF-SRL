@@ -1,6 +1,6 @@
 # FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning
 
-This repository contains rhe implemenation of the project "FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning"
+This repository contains the implemenation of the project "FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning"
 
 In this paper, we presented FF-SRL, a GPU-based simulation environment for robotic surgery that leverages an
 advanced XPBD simulation of deformable tissue. We showed that FF-SRL can significantly speed up the RL training
@@ -15,7 +15,43 @@ stresses the need for simulated surgical environments, which are not only realis
 GPU. This avoids typical bottlenecks associated with data transfer between the CPU and GPU, leading to an accelerated learning rates. Our results show that FF-SRL reduces the training time of a complex tissue manipulation task by an order of magnitude, down to a couple of minutes, compared to a conventional CPU/GPU simulator. Such speed-up may facilitate the experimentation with RL techniques and contribute to the development of new generation of surgical systems. Hence, we make our code publicly available to the community.
 
 ## Content
- ###  <u> **The code will be released after paper acceptance.** </u>
+ ###  <u> **The full code will be released after paper acceptance.** </u>
+
+## Features
+* Soft-body simulation engine creted with XPBD solver,
+* Simulation code written in [nVidia warp](https://github.com/NVIDIA/warp) allowing for fast execution on GPUs and interoperability with e.g. PyTorch for Reinforcement Learning,
+* The simulation is written in data-oriented way (data for multiple environments are kept in the same arrays),
+* Rendering with simple yet fast ray casting on GPU,
+* Bounding Volume Hierarchy creation,
+* Scene creation with nVidia OmniVerse (tools for that will be added in feature)
+* Instrument grasping implemented and simple topological modifications to be added (cutting, heating),
+
+## Installation
+```
+git clone https://github.com/SanoScience/FF-SRL.git
+conda create -n FF_SRL python=3.9
+conda activate FF_SRL
+cd FF-SRL
+pip install -e .
+```
+
+## Examples
+![liver8Low](https://github.com/SanoScience/FF-SRL/assets/4333336/8978887d-9ed1-4389-be54-082068e6e77a)
+
+An example of liver simulation with a laparoscope can be accessed here:
+```
+cd FF-SRL/FF_SRL/FF_SRL/tests/
+python testLiverRetraction.py
+```
+In order to move the laparoscope use:
+* j to move left
+* l to move right
+* i to move away (z axis)
+* k to move closer (z axis)
+* u to move up
+* o to move down
+* f to clamp the instrument effector
+* r to reset the environment
 
 ## Citing
 **Paper submitted to iros 2024-still under review.**
