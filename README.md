@@ -36,12 +36,13 @@ pip install -e .
 ```
 
 ## Examples
-![liver8Low](https://github.com/SanoScience/FF-SRL/assets/4333336/8978887d-9ed1-4389-be54-082068e6e77a)
+![liverTextureCool](https://github.com/SanoScience/FF-SRL/assets/4333336/cbddf759-0223-45ff-8f9d-31d2a1738b42)
+
 
 An example of liver simulation with a laparoscope can be accessed here:
 ```
 cd FF-SRL/FF_SRL/FF_SRL/tests/
-python testLiverRetraction.py
+python testLiverRetractionTexture.py
 ```
 In order to move the laparoscope use:
 * j to move left
