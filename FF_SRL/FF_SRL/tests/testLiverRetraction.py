@@ -97,7 +97,7 @@ class TestStandalone():
             wp.capture_launch(self.renderGraph)
 
 numAct = 3
-nEnvs = 2
+nEnvs = 8
 maxIter = 10000
 
 if len(sys.argv) > 1:

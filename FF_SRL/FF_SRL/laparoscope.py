@@ -288,6 +288,8 @@ class SimLaparoscopeDO(dk.SimObject):
         self.rightClampTip = None
         self.rightClampColor = None
 
+        self.texture = None
+
         time = Usd.TimeCode.Default()
         self.laparoscopeScale = prim.GetAttribute("xformOp:scale").Get()
 

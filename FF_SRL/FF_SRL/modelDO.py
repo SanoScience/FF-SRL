@@ -3,7 +3,8 @@ import math
 import numpy as np
 import FF_SRL as dk
 import torch
-from pxr import Usd, UsdGeom, Sdf, Vt, Gf
+from PIL import Image
+from pxr import Usd, UsdGeom, UsdShade, Sdf, Vt, Gf
 
 PI = wp.constant(math.pi)
 ROTATIONCENTER_XFORM = wp.constant(3)
@@ -373,7 +374,7 @@ def applyTransformationToChildren(xform: wp.array(dtype=wp.mat44), matrix: wp.ma
             xform[numEnv*7 + 2] = applyTransformationToChild(xform, matrix, parentId, numEnv*7 + 2)
     if(xFormKind == 3):
         for i in range(7):
-            if not i == parentId:
+            if not i == xFormKind:
                 xform[numEnv*7 + i] = applyTransformationToChild(xform, matrix, parentId, numEnv*7 + i)
     if(xFormKind == 0):
         for i in range(1, 7):
@@ -421,18 +422,14 @@ class SimLockBoxDO(dk.SimObject):
 
     def lockArray(self, vecArray, array):
 
-        p1, p2, p3, p4 = dk.getBoxSpanVectors(self.xForm)
-
-        pi = p2 - p1
-        pj = p3 - p1
-        pk = p4 - p1
-
         for i in range(len(vecArray)):
             vec = vecArray[i]
-            v = vec - p1
+            vecLocalBox = self.xForm.GetInverse().Transform(Gf.Vec3f(vec))
 
-            if dk.checkIfWithinBounds(v, pi, pj, pk):
-                array[i] = 0.0
+            if vecLocalBox[0] < 1.0 and vecLocalBox[0] > -1.0:
+                if vecLocalBox[1] < 1.0 and vecLocalBox[1] > -1.0:
+                    if vecLocalBox[2] < 1.0 and vecLocalBox[2] > -1.0:
+                        array[i] = 0.0
 
 class SimMeshDO(dk.SimObject):
 
@@ -539,6 +536,7 @@ class SimMeshDO(dk.SimObject):
         # Rendering
         self.texCoords = None
         self.texIndices = None
+        self.texture = None
 
         self.getMeshProperties()
         self.getMeshMapping()
@@ -628,6 +626,19 @@ class SimMeshDO(dk.SimObject):
         self.tetrahedron = meshTetrahedrons
         self.tetrahedronRestVolume = meshTetrahedronsRestVolumes
 
+        # check if object has material
+        bindingAPI = UsdShade.MaterialBindingAPI(self.prim)
+        rel = bindingAPI.GetDirectBindingRel()
+        pathList = rel.GetTargets()
+        if len(pathList) > 0:
+            primMat = self.prim.GetStage().GetPrimAtPath(pathList[0].pathString + "/Shader")
+            self.texture = primMat.GetAttribute("inputs:diffuse_texture").Get().resolvedPath
+            self.texCoords = self.prim.GetAttribute("primvars:st").Get()
+            if self.prim.GetAttribute("primvars:st:indices"):
+                self.texIndices = self.prim.GetAttribute("primvars:st:indices").Get()
+            else:
+                self.texIndices = meshVisFaces
+
 class SimRigidDO(dk.SimObject):
 
     def __init__(self, prim:Usd.Prim, device:str="cuda:0", requiresGrad=True) -> None:
@@ -663,6 +674,7 @@ class SimRigidDO(dk.SimObject):
         # Rendering
         self.texCoords = None
         self.texIndices = None
+        self.texture = None
 
         self.getData()
 
@@ -685,11 +697,28 @@ class SimRigidDO(dk.SimObject):
 
         # transform particles to world space
         self.vertex = self.transformLocalVecArray(self.meshVisPoints)
-        self.visPoint = self.meshVisPoints
+        # self.visPoint = self.meshVisPoints
+        self.visPoint = self.vertex
+        self.meshVisPoints = np.array(self.meshVisPoints)
 
         # convert node inputs to GPU arrays
         self.triangle = meshVisFaces
         self.visFace = meshVisFaces
+
+        # check if object has material
+        bindingAPI = UsdShade.MaterialBindingAPI(self.prim)
+        rel = bindingAPI.GetDirectBindingRel()
+        rel = bindingAPI.GetDirectBindingRel()
+        pathList = rel.GetTargets()
+        if len(pathList) > 0:
+            pathList[0].pathString
+            primMat = self.prim.GetStage().GetPrimAtPath(pathList[0].pathString + "/Shader")
+            self.texture = primMat.GetAttribute("inputs:diffuse_texture").Get().resolvedPath
+            self.texCoords = self.prim.GetAttribute("primvars:st").Get()
+            if self.prim.GetAttribute("primvars:st:indices"):
+                self.texIndices = self.prim.GetAttribute("primvars:st:indices").Get()
+            else:
+                self.texIndices = meshVisFaces
 
 class SimConnectorDO(dk.SimObject):
 
@@ -768,7 +797,9 @@ class SimModelDO():
                  globalConnectorKs=0.125,
                  globalConnectorRestLengthMul=0.02,
                  workspaceLow=[-1e5, -1e5, -1e5],
-                 workspaceHigh=[1e5, 1e5, 1e5]) -> None:
+                 workspaceHigh=[1e5, 1e5, 1e5],
+                 startingBoxLow=[-1e5, -1e5, -1e5],
+                 startingBoxHigh=[1e5, 1e5, 1e5]) -> None:
 
         debugTimes = False
         with wp.ScopedTimer("Whole init", active=debugTimes, detailed=False):
@@ -776,6 +807,7 @@ class SimModelDO():
             self.stage = stage
             self.device = device
             self.numEnvs = numEnvs
+            self.cartesianActions = 3
 
             self.simSubsteps = simSubsteps
             self.simFrameRate = simFrameRate
@@ -784,6 +816,10 @@ class SimModelDO():
 
             self.workspaceLow = wp.vec3(workspaceLow)
             self.workspaceHigh = wp.vec3(workspaceHigh)
+            self.startingBoxLowTH = startingBoxLow
+            self.startingBoxHighTH = startingBoxHigh
+            self.startingBoxLow = wp.vec3(self.startingBoxLowTH)
+            self.startingBoxHigh = wp.vec3(self.startingBoxHighTH)
 
             self.gravity = wp.vec3(environmentGravity[0], environmentGravity[1], environmentGravity[2])
             self.velocityDampening = environmentVelocityDampening
@@ -1013,6 +1049,83 @@ class SimModelDO():
                                                          [laparoscopeLeftClampColor] * self.numLeftClampVisPoint +\
                                                          [laparoscopeRightClampColor] * self.numRightClampVisPoint
 
+            # Create variables that will be the same for all envs
+            objectId = 0
+            numVisFacesCummulative = 0
+            textureId = 1
+            objectUsesTexture = []
+            objectNumVisFaceCummulative = []
+            visFaceToObjectId = []
+            textures = np.array([])
+            texturesShift = []
+            texturesSize = []
+            texIndices = np.array([])
+            texIndicesShift = []
+            texCoords = np.array([])
+            texCoordsShift = []
+
+            # The order has to be maintained
+            for j in range(len(self.simEnvironment.simMeshes)):
+            # for j in range(1):
+                simMesh = self.simEnvironment.simMeshes[j]
+                if not simMesh.texture == None:
+                    objectUsesTexture.append(textureId)
+                    textureId += 1
+                    texturesShift.append(int(len(textures)/3))
+                    textures = np.append(textures, np.array(Image.open(simMesh.texture).convert('RGB')) / 255.0)
+                    texturesSize.append(int(math.sqrt(int(len(textures)/3) - texturesShift[-1])))
+                    texIndicesShift.append(int(len(texIndices)))
+                    texIndices = np.append(texIndices, np.array(simMesh.texIndices))
+                    texCoordsShift.append(int(len(texCoords)/2))
+                    texCoords = np.append(texCoords, np.array(simMesh.texCoords))
+                else:
+                    objectUsesTexture.append(0)
+
+                visFaceToObjectId.extend([objectId] * simMesh.numVisFaces)
+                objectNumVisFaceCummulative.append(numVisFacesCummulative)
+                numVisFacesCummulative += simMesh.numVisFaces
+                objectId += 1
+
+            for j in range(len(self.simEnvironment.simRigids)):
+                simRigid = self.simEnvironment.simRigids[j]
+                if not simRigid.texture == None:
+                    objectUsesTexture.append(textureId)
+                    textureId += 1
+                    texturesShift.append(int(len(textures)/3))
+                    textures = np.append(textures, np.array(Image.open(simRigid.texture).convert('RGB')) / 255.0)
+                    texturesSize.append(int(math.sqrt(int(len(textures)/3) - texturesShift[-1])))
+                    texIndicesShift.append(len(texIndices))
+                    texIndices = np.append(texIndices, np.array(simRigid.texIndices))
+                    texCoordsShift.append(int(len(texCoords)/2))
+                    texCoords = np.append(texCoords, np.array(simRigid.texCoords))
+                else:
+                    objectUsesTexture.append(0)
+
+                visFaceToObjectId.extend([objectId] * simRigid.numVisFaces)
+                objectNumVisFaceCummulative.append(numVisFacesCummulative)
+                numVisFacesCummulative += simRigid.numVisFaces
+                objectId += 1
+
+            for j in range(len(self.simEnvironment.simLaparoscopes)):
+                simLaparoscope = self.simEnvironment.simLaparoscopes[j]
+                if not simLaparoscope.texture == None:
+                    objectUsesTexture.append(textureId)
+                    textureId += 1
+                    texturesShift.append(int(len(textures)/3))
+                    textures = np.append(textures, np.array(Image.open(simLaparoscope.texture).convert('RGB')) / 255.0)
+                    texturesSize.append(int(math.sqrt(int(len(textures)/3) - texturesShift[-1])))
+                    texIndicesShift.append(len(texIndices))
+                    texIndices = np.append(texIndices, np.array(simLaparoscope.texIndices))
+                    texCoordsShift.append(int(len(texCoords)/2))
+                    texCoords = np.append(texCoords, np.array(simLaparoscope.texCoords))
+                else:
+                    objectUsesTexture.append(0)
+
+                visFaceToObjectId.extend([objectId] * simLaparoscope.numVisFaces)
+                objectNumVisFaceCummulative.append(numVisFacesCummulative)
+                numVisFacesCummulative += simLaparoscope.numVisFaces
+                objectId += 1
+
             if self.reduce:
                 startVertexEdge = 0
                 startVertexTetrahedron = 0
@@ -1115,6 +1228,7 @@ class SimModelDO():
                 self.numLaparoscopeVisFaces = int(len(laparoscopeVisFace) / 3.0)
                 self.numLaparoscopeVisPoints = len(laparoscopeVisPoint)
 
+                # Combined for all envs
                 allVisPoint = visPoint + rigidVisPoint + laparoscopeVisPoint
                 self.allVisPoint = wp.array(allVisPoint, dtype=wp.vec3, device=self.device)
                 self.allVisPointInitial = wp.array(allVisPoint, dtype=wp.vec3, device=self.device)
@@ -1139,15 +1253,17 @@ class SimModelDO():
                 self.transformSimLaparoscopeMeshData()
                 self.transformSimMeshData()
 
-                # for renderer tests
-                distance = np.linalg.norm(allVisPoint, axis=1)
-                radius = np.max(distance)
-                distance = distance / radius
-                tex_coords = np.stack((distance, distance), axis=1)
-                tex_indices = allVisFace
-
-                self.texCoords = wp.array(tex_coords, dtype=wp.vec2, device=self.device)
-                self.texIndices = wp.array(tex_indices, dtype=wp.int32, device=self.device)
+                # Rendering
+                self.visFaceToObjectId = wp.array(visFaceToObjectId, dtype=wp.int32, device=self.device)
+                self.objectNumVisFaceCummulative = wp.array(objectNumVisFaceCummulative, dtype=wp.int32, device=self.device)
+                self.objectUsesTexture = wp.array(objectUsesTexture, dtype=wp.int32, device=self.device)
+                self.textures = wp.array(textures, dtype=wp.vec3, device=self.device)
+                self.texturesShift = wp.array(texturesShift, dtype=wp.int32, device=self.device)
+                self.texturesSize = wp.array(texturesSize, dtype=wp.int32, device=self.device)
+                self.texCoords = wp.array(texCoords, dtype=wp.vec2, device=self.device)
+                self.texCoordsShift = wp.array(texCoordsShift, dtype=wp.int32, device=self.device)
+                self.texIndices = wp.array(texIndices, dtype=wp.int32, device=self.device)
+                self.texIndicesShift = wp.array(texIndicesShift, dtype=wp.int32, device=self.device)
 
     def createDataForBVH(self):
         #This is based on a fact that all environments are identical and will only store one BVH for all envs
@@ -1158,6 +1274,7 @@ class SimModelDO():
         currentVertices = 0
 
         self.numEnvMeshesVisPoints = 0
+        self.numEnvMeshesVertices = 0
         self.numEnvMeshesVisFaces = 0
         self.numEnvRigidsVisPoints = 0
         self.numEnvRigidsVisFaces = 0
@@ -1178,6 +1295,7 @@ class SimModelDO():
             currentVertices += len(simMesh.vertex)
 
         self.numEnvMeshesVisPoints = currentVisPoints
+        self.numEnvMeshesVertices = currentVertices
         self.numEnvMeshesVisFaces = int(len(envVisFace) / 3.0)
 
         for j in range(len(self.simEnvironment.simRigids)):
@@ -1239,6 +1357,9 @@ class SimModelDO():
                           self.laparoscopeDragCutHeat,
                           self.laparoscopeDragCutHeatUpdate],
                   device=self.device)
+            
+        self.transformSimMeshData()
+        self.transformSimLaparoscopeMeshData()
     
     def applyCartesianActions(self, cartesianActions):
 
@@ -1257,6 +1378,9 @@ class SimModelDO():
                           self.laparoscopeRadius,
                           self.laparoscopeHeight],
                   device=self.device)
+            
+        self.transformSimMeshData()
+        self.transformSimLaparoscopeMeshData()
         
     def applyCartesianActionsInWorkspace(self, cartesianActions):
 
@@ -1362,10 +1486,10 @@ class SimModelDO():
 
         return vertexTensor[vertexId]
     
-    def getVertexPositionsTensorMultiEnvs(self, vertexId):
+    def getVertexPositionsTensorMultiEnvs(self, vertexIds):
 
         vertexTensor = wp.to_torch(self.vertex, requires_grad=False)
-        indices = [vertexId + self.numEnvAllVertices*i for i in range(self.numEnvs)]
+        indices = [vertexIds[i] + self.numEnvAllVertices*i for i in range(self.numEnvs)]
 
         return vertexTensor[indices]
     
@@ -1404,7 +1528,6 @@ class SimModelDO():
         actions = actions.flatten()
 
         # Need to apply twice to check for dragging
-        self.applyActions(wp.from_torch(actions))
         self.applyActions(wp.from_torch(actions))
          
     def forceLaparoscopeClampVertex(self, vertexId:int, envs, on:float=1.0, animate:bool=True):
@@ -1469,6 +1592,7 @@ class SimModelDO():
 
         for i in envNums:
             vertexOffset = i * self.numEnvAllVertices
+            dragCutHeatOffset = i * 3
             # reset meshes
             wp.copy(self.vertex, self.initialVertex, dest_offset=vertexOffset, src_offset=vertexOffset, count=self.numEnvAllVertices)
             wp.copy(self.predictedVertex, zeroVertex, dest_offset=vertexOffset, src_offset=vertexOffset, count=self.numEnvAllVertices)
@@ -1484,8 +1608,8 @@ class SimModelDO():
             vertexOffset = i * self.numEnvAllVertices
             wp.copy(self.laparoscopeVertex, self.laparoscopeInitialVertex)
 
-            wp.copy(self.laparoscopeDragCutHeat, zeroDragCutHeat, dest_offset=i, src_offset=i, count=1)
-            wp.copy(self.laparoscopeDragCutHeatUpdate, zeroDragCutHeat, dest_offset=i, src_offset=i, count=1)
+            wp.copy(self.laparoscopeDragCutHeat, zeroDragCutHeat, dest_offset=dragCutHeatOffset, src_offset=dragCutHeatOffset, count=3)
+            wp.copy(self.laparoscopeDragCutHeatUpdate, zeroDragCutHeat, dest_offset=dragCutHeatOffset, src_offset=dragCutHeatOffset, count=3)
 
             zeroActiveVertex = wp.zeros_like(self.activeDragConstraint)
             wp.copy(self.activeDragConstraint, zeroActiveVertex, dest_offset=vertexOffset, src_offset=vertexOffset, count=self.numEnvAllVertices)

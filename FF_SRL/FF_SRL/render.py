@@ -36,12 +36,20 @@ class RenderMesh:
     vertices: wp.array(dtype=wp.vec3)
     indices: wp.array(dtype=int)
     texCoords: wp.array(dtype=wp.vec2)
-    texIndices: wp.array(dtype=int)
+    texCoordsShift: wp.array(dtype=wp.int32)
+    texIndices: wp.array(dtype=wp.int32)
+    texIndicesShift: wp.array(dtype=wp.int32)
+    texture: wp.array(dtype=wp.vec3)
+    textureShift: wp.array(dtype=wp.int32)
+    textureSize: wp.array(dtype=wp.int32)
     vertexNormals: wp.array(dtype=wp.vec3)
     vertexColors: wp.array(dtype=wp.vec3)
     pos: wp.array(dtype=wp.vec3)
     rot: wp.array(dtype=wp.quat)
     numTris: wp.int32
+    visFaceToObjectId: wp.array(dtype=wp.int32)
+    objectUsesTexture: wp.array(dtype=wp.int32)
+    objectNumVisFaceCummulative: wp.array(dtype=wp.int32)
 
 @wp.struct
 class Camera:
@@ -52,9 +60,9 @@ class Camera:
     aspect: float
     e: float
     tan: float
-    pos: wp.vec3
+    pos: wp.array(dtype=wp.vec3)
     at: wp.vec3
-    rot: wp.quat
+    rot: wp.array(dtype=wp.quat)
 
 @wp.struct        
 class DirectionalLights:
@@ -115,10 +123,12 @@ def normalize_kernel(
 @wp.func
 def texture_interpolation(
         tex_interp: wp.vec2,
-        texture: wp.array2d(dtype=wp.vec3)):
+        texture: wp.array(dtype=wp.vec3),
+        textureShift: wp.int32,
+        textureSize: wp.int32):
     
-    tex_width = texture.shape[1]
-    tex_height = texture.shape[0]
+    tex_width = textureSize
+    tex_height = textureSize
     tex = wp.vec2(tex_interp[0] * float(tex_width - 1), (1.0 - tex_interp[1]) * float(tex_height - 1))
     
     x0 = int(tex[0])
@@ -127,10 +137,10 @@ def texture_interpolation(
     y0 = int(tex[1])
     y1 = y0 + 1
     alpha_y = tex[1] - float(y0)
-    c00 = texture[y0, x0]
-    c10 = texture[y0, x1]
-    c01 = texture[y1, x0]
-    c11 = texture[y1, x1]
+    c00 = texture[textureShift + y0 + x0 * tex_width]
+    c10 = texture[textureShift + y0 + x1 * tex_width]
+    c01 = texture[textureShift + y1 + x0 * tex_width]
+    c11 = texture[textureShift + y1 + x1 * tex_width]
     lower = (1.0 - alpha_x) * c00 + alpha_x * c10
     upper = (1.0 - alpha_x) * c01 + alpha_x * c11
     color = (1.0 - alpha_y) * lower + alpha_y * upper
@@ -140,7 +150,6 @@ def texture_interpolation(
 @wp.kernel
 def drawSimBVHKernel(mesh: RenderMesh,
                      camera: Camera,
-                     texture: wp.array2d(dtype=wp.vec3),
                      rays_width: int,
                      rays_height: int,
                      rays: wp.array(dtype=wp.vec3),
@@ -169,8 +178,8 @@ def drawSimBVHKernel(mesh: RenderMesh,
     sy = 2.0*float(y)/float(rays_height) - 1.0
 
     # compute view ray in world space
-    ro_world = camera.pos
-    rd_world = wp.normalize(wp.quat_rotate(camera.rot, wp.vec3(sx * camera.tan * camera.aspect, sy * camera.tan, -1.0)))
+    ro_world = camera.pos[0]
+    rd_world = wp.normalize(wp.quat_rotate(camera.rot[0], wp.vec3(sx * camera.tan * camera.aspect, sy * camera.tan, -1.0)))
 
     # compute view ray in mesh space
     inv = wp.transform_inverse(wp.transform(mesh.pos[0], mesh.rot[0]))
@@ -184,6 +193,7 @@ def drawSimBVHKernel(mesh: RenderMesh,
     # triP = meshQueryRay(ro, rd, mesh, aabbMin, aabbMax, leftNode, triMap, firstTriId, triCount, stack, tid, envNodeShift, envTriShift)
     
     triId = wp.int32(meshQueryRes[0][0])
+    localTriId = wp.int32(meshQueryRes[2][0])
     p = wp.vec3(meshQueryRes[1][0], meshQueryRes[1][1], meshQueryRes[1][2])
     t = meshQueryRes[0][1]
 
@@ -216,13 +226,23 @@ def drawSimBVHKernel(mesh: RenderMesh,
                 color = wp.vec3(1.0)
 
             elif mode == 1:  # texture interpolation
-                tex_a = mesh.texCoords[mesh.texIndices[triId*3]]
-                tex_b = mesh.texCoords[mesh.texIndices[triId*3 + 1]]
-                tex_c = mesh.texCoords[mesh.texIndices[triId*3 + 2]]
 
-                tex = u * tex_a + v * tex_b + w * tex_c
+                objectId = mesh.visFaceToObjectId[triId]
+                textureId = mesh.objectUsesTexture[objectId]
 
-                color = texture_interpolation(tex, texture)
+                if textureId > 0:
+                    textureId -= 1
+                    texturesShift = mesh.textureShift[textureId]
+                    texturesSize = mesh.textureSize[textureId]
+                    texCoordsShift = mesh.texCoordsShift[textureId]
+                    texIndicesShift = mesh.texIndicesShift[textureId]
+                    tex_a = mesh.texCoords[texCoordsShift + mesh.texIndices[texIndicesShift + localTriId * 3]]
+                    tex_b = mesh.texCoords[texCoordsShift + mesh.texIndices[texIndicesShift + localTriId * 3 + 1]]
+                    tex_c = mesh.texCoords[texCoordsShift + mesh.texIndices[texIndicesShift + localTriId * 3 + 2]]
+
+                    tex = u * tex_a + v * tex_b + w * tex_c
+
+                    color = texture_interpolation(tex, mesh.texture, texturesShift, texturesSize)
 
             elif mode == 3:
 
@@ -256,7 +276,6 @@ def drawSimBVHKernel(mesh: RenderMesh,
 @wp.kernel
 def drawSimBVHKernelManyEnvs(mesh: RenderMesh,
                              camera: Camera,
-                             texture: wp.array2d(dtype=wp.vec3),
                              rays_width: int,
                              rays_height: int,
                              rays: wp.array(dtype=wp.vec3),
@@ -287,8 +306,8 @@ def drawSimBVHKernelManyEnvs(mesh: RenderMesh,
     sy = 2.0*float(y)/float(rays_height) - 1.0
 
     # compute view ray in world space
-    ro_world = camera.pos
-    rd_world = wp.normalize(wp.quat_rotate(camera.rot, wp.vec3(sx * camera.tan * camera.aspect, sy * camera.tan, -1.0)))
+    ro_world = camera.pos[0]
+    rd_world = wp.normalize(wp.quat_rotate(camera.rot[0], wp.vec3(sx * camera.tan * camera.aspect, sy * camera.tan, -1.0)))
 
     # compute view ray in mesh space
     inv = wp.transform_inverse(wp.transform(mesh.pos[0], mesh.rot[0]))
@@ -301,14 +320,16 @@ def drawSimBVHKernelManyEnvs(mesh: RenderMesh,
     meshQueryRes = meshQueryRayManyEnvs(ro, rd, mesh, aabbMin, aabbMax, leftNode, triMap, firstTriId, triCount, numBVHNodes, stack, tid, currentEnv, numEnv, numEnvMeshVisFaces, numEnvRigidVisFaces, numEnvLaparoscopeVisFaces)
     
     triId = wp.int32(meshQueryRes[0][0])
+    localEnvTriId = wp.int32(meshQueryRes[2][0])
+
     p = wp.vec3(meshQueryRes[1][0], meshQueryRes[1][1], meshQueryRes[1][2])
     t = meshQueryRes[0][1]
 
     if triId > -1:
 
-        i = mesh.indices[triId*3]
-        j = mesh.indices[triId*3 + 1]
-        k = mesh.indices[triId*3 + 2]
+        i = mesh.indices[triId * 3]
+        j = mesh.indices[triId * 3 + 1]
+        k = mesh.indices[triId * 3 + 2]
 
         a = mesh.vertices[i]
         b = mesh.vertices[j]
@@ -333,13 +354,30 @@ def drawSimBVHKernelManyEnvs(mesh: RenderMesh,
                 color = wp.vec3(1.0)
 
             elif mode == 1:  # texture interpolation
-                tex_a = mesh.texCoords[mesh.texIndices[triId*3]]
-                tex_b = mesh.texCoords[mesh.texIndices[triId*3 + 1]]
-                tex_c = mesh.texCoords[mesh.texIndices[triId*3 + 2]]
+                
+                objectId = mesh.visFaceToObjectId[localEnvTriId]
+                textureId = mesh.objectUsesTexture[objectId]
 
-                tex = u * tex_a + v * tex_b + w * tex_c
+                if textureId > 0:
+                    localTriId = localEnvTriId - mesh.objectNumVisFaceCummulative[objectId]
+                    textureId -= 1
 
-                color = texture_interpolation(tex, texture)
+                    texturesShift = mesh.textureShift[textureId]
+                    texturesSize = mesh.textureSize[textureId]
+                    texCoordsShift = mesh.texCoordsShift[textureId]
+                    texIndicesShift = mesh.texIndicesShift[textureId]
+
+                    tex_a = mesh.texCoords[texCoordsShift + mesh.texIndices[texIndicesShift + localTriId * 3]]
+                    tex_b = mesh.texCoords[texCoordsShift + mesh.texIndices[texIndicesShift + localTriId * 3 + 1]]
+                    tex_c = mesh.texCoords[texCoordsShift + mesh.texIndices[texIndicesShift + localTriId * 3 + 2]]
+
+                    tex = u * tex_a + v * tex_b + w * tex_c
+
+                    color = texture_interpolation(tex, mesh.texture, texturesShift, texturesSize)
+
+                # # revert to vertex color if no texture for this mesh
+                else:
+                    color = (mesh.vertexColors[i] + mesh.vertexColors[j] + mesh.vertexColors[k]) / 3.0
 
             elif mode == 3:
 
@@ -422,6 +460,7 @@ def meshQueryRayManyEnvs(ro: wp.vec3,
                     
                     # ToDo: This should be moved to a mapping array
                     visFaceShift = 0
+                    localEnvTriId = triId
 
                     if triId >= (numEnvMeshVisFaces + numEnvRigidVisFaces):
                         visFaceShift = (numEnv-1) * (numEnvMeshVisFaces + numEnvRigidVisFaces) + currentEnv * numEnvLaparoscopeVisFaces
@@ -447,7 +486,7 @@ def meshQueryRayManyEnvs(ro: wp.vec3,
                     if tTriangle < tMin and tTriangle > 0.0:
 
                         tMin = tTriangle
-                        meshQueryRes = wp.mat33f(float(triId), tMin, 0.0, boolVec[1], boolVec[2], boolVec[3], 0.0, 0.0, 0.0)
+                        meshQueryRes = wp.mat33f(float(triId), tMin, 0.0, boolVec[1], boolVec[2], boolVec[3], float(localEnvTriId), 0.0, 0.0)
             else:
                 stack[stackShift + (count)] = leftId
                 stack[stackShift + (count + 1)] = rightId
@@ -786,7 +825,7 @@ def setXform(xform, transformation, time, scale=Gf.Vec3d(1.0, 1.0, 1.0)):
 
 class WarpRaycastRendererDO:
 
-    def __init__(self, device, simModel, cameraPos=[3.0, 3.0, 3.0], cameraRot=[0.0, 0.0, 0.0], lightPos=[3.0, 0.0, 0.0], lightIntensity=0.3, resolution:int=512, mode="human"):
+    def __init__(self, device, simModel, cameraPos=[3.0, 3.0, 3.0], cameraRot=[0.0, 0.0, 0.0], lightPos=[3.0, 0.0, 0.0], lightIntensity=0.3, resolution:int=512, mode="human", horizontalAperture=19.2, verticalAperture=19.2):
 
         self.device=device
         self.mode = mode
@@ -797,8 +836,8 @@ class WarpRaycastRendererDO:
         self.cameraPos = wp.vec3(cameraPos[0], cameraPos[1], cameraPos[2])
         self.cameraRot = wp.vec3(cameraRot[0], cameraRot[1], cameraRot[2])
 
-        horizontal_aperture = 19.2
-        vertical_aperture = 19.2
+        horizontal_aperture = horizontalAperture
+        vertical_aperture = verticalAperture
         aspect = horizontal_aperture / vertical_aperture
         focal_length = 50.0
         self.height = resolution
@@ -810,9 +849,9 @@ class WarpRaycastRendererDO:
         self.num_samples = 1
 
         # set render mode
-        # self.render_mode = RenderMode.texture
+        self.render_mode = RenderMode.texture
         # self.render_mode = RenderMode.grayscale
-        self.render_mode = RenderMode.vertex_color
+        # self.render_mode = RenderMode.vertex_color
         # self.render_mode = RenderMode.normal_map
         # self.render_mode = RenderMode.depth_map
 
@@ -823,8 +862,8 @@ class WarpRaycastRendererDO:
         self.camera.aspect = aspect
         self.camera.e = focal_length
         self.camera.tan = vertical_aperture / (2.0 * focal_length)
-        self.camera.pos = self.cameraPos
-        self.camera.rot = wp.quat_rpy(self.cameraRot[2], self.cameraRot[0], self.cameraRot[1])
+        self.camera.pos = wp.array(self.cameraPos, dtype=wp.vec3, device=self.device)
+        self.camera.rot = wp.array(wp.quat_rpy(self.cameraRot[2], self.cameraRot[0], self.cameraRot[1]), dtype=wp.quat, device=self.device)
         # self.camera.at = wp.normalize(wp.quat_rotate(self.camera.rot, wp.vec3(0.0, 0.0, -1.0)))
 
         # construct lights
@@ -846,19 +885,12 @@ class WarpRaycastRendererDO:
         # self.pixels = wp.zeros(self.num_pixels, dtype=wp.vec3, device=self.device)
         self.pixels = wp.zeros(self.num_pixels * self.numEnvs, dtype=wp.vec3, device=self.device)
 
-        # manufacture texture for this asset
-        x = np.arange(256.0)
-        xx, yy = np.meshgrid(x, x)
-        zz = np.zeros_like(xx)
-        texture_host = np.stack((xx, yy, zz), axis=2) / 255.0
-        # construct texture
-        self.texture = wp.array2d(texture_host, dtype=wp.vec3, device=self.device)
-
         # create plot window
         if self.mode in ["human", "debug"]:
             plt.figure(figsize=(10, 10))
             plt.axis("off")
         if self.mode == "gpu":
+        # if self.mode in ["gpu", "gpudebug"]:
             numEnvsVertical = math.floor(math.sqrt(self.simModel.numEnvs))
             numEnvsHorizontal = math.ceil(self.simModel.numEnvs/numEnvsVertical)
             self.window = Window(resolution*numEnvsHorizontal, resolution*numEnvsVertical, "diffKit")
@@ -871,7 +903,15 @@ class WarpRaycastRendererDO:
         self.renderMesh.vertices = simModel.allVisPoint
         self.renderMesh.indices = simModel.allVisFace
         self.renderMesh.texCoords = simModel.texCoords
+        self.renderMesh.texCoordsShift = simModel.texCoordsShift
         self.renderMesh.texIndices = simModel.texIndices
+        self.renderMesh.texIndicesShift = simModel.texIndicesShift
+        self.renderMesh.texture = simModel.textures
+        self.renderMesh.textureShift = simModel.texturesShift
+        self.renderMesh.textureSize = simModel.texturesSize
+        self.renderMesh.objectUsesTexture = simModel.objectUsesTexture
+        self.renderMesh.visFaceToObjectId = simModel.visFaceToObjectId
+        self.renderMesh.objectNumVisFaceCummulative = simModel.objectNumVisFaceCummulative
         self.renderMesh.vertexColors = simModel.allVisPointColor
         self.meshNormalSums = wp.zeros(simModel.numAllVisPoints, dtype=wp.vec3, device=self.device)
         self.renderMesh.vertexNormals = wp.zeros(simModel.numAllVisPoints, dtype=wp.vec3, device=self.device)
@@ -903,7 +943,6 @@ class WarpRaycastRendererDO:
             inputs=[
                 self.renderMesh,
                 self.camera,
-                self.texture,
                 self.rays_width,
                 self.rays_height,
                 self.rays,
@@ -935,6 +974,7 @@ class WarpRaycastRendererDO:
 
     def renderFunctionNew(self, simBVH):
 
+        # Needed for correct normals and therefore colors rendering
         wp.launch(kernel=zeroVec3Array,
             dim=self.simModel.numAllVisPoints,
             inputs=[self.meshNormalSums])
@@ -953,7 +993,6 @@ class WarpRaycastRendererDO:
             inputs=[
                 self.renderMesh,
                 self.camera,
-                self.texture,
                 self.rays_width,
                 self.rays_height,
                 self.rays,
@@ -1075,7 +1114,7 @@ class WarpRaycastRendererDO:
 
                 for i in range(simModel.numEnvs):
 
-                    if self.mode in ["human", "debug", "terminal", "gpu"]:
+                    if self.mode in ["human", "debug", "terminal", "gpu", "gpudebug"]:
                         rowId = int(i / sqrtNumEnvs)
                         columnId = i % sqrtNumEnvs
 
@@ -1085,7 +1124,7 @@ class WarpRaycastRendererDO:
                         else:
                             imageRows[rowId] = torch.cat((imageRows[rowId], image[i]), 0)
                 
-            if self.mode in ["human", "debug", "terminal", "gpu"]:
+            if self.mode in ["human", "debug", "terminal", "gpu", "gpudebug"]:
                 lastRowShape = imageRows[-1].shape
                 if not imageRows[0].shape == lastRowShape:
                     missingImages = torch.ones((imageRows[0].shape[0] - lastRowShape[0], lastRowShape[1], lastRowShape[2]), device=self.device)
@@ -1107,13 +1146,190 @@ class WarpRaycastRendererDO:
             else:
                 plt.pause(.001)
                 plt.draw()
+
         if self.mode == "gpu":
-            alpha = torch.ones([images.shape[0], images.shape[1], 1], dtype=torch.float32, device=self.device)
+            alpha = torch.ones([images.shape[0], images.shape[1], 1], dtype=torch.float32, device=wp.device_to_torch(self.device))
             images = torch.cat([images, alpha], dim=-1)
             self.window.draw(images)
+
+        if self.mode == "gpudebug":
+            alpha = torch.ones([images.shape[0], images.shape[1], 1], dtype=torch.float32, device=wp.device_to_torch(self.device))
+            images = torch.cat([images, alpha], dim=-1)
+            return images
         
         if self.mode in ["headless", "debug", "gpu", "gpuless"]:
             return image
+            
+    def moveCameraForward(self, distance:float=0.1) -> None:
+        self.cameraPos += wp.vec3(0.0, 0.0, -distance)
+        cameraPosHost = wp.array(self.cameraPos, dtype=wp.vec3, device="cpu")
+        wp.copy(self.camera.pos, cameraPosHost)
+            
+    def moveCameraLeft(self, distance:float=0.1) -> None:
+        self.cameraPos += wp.vec3(-distance, 0.0, 0.0)
+        cameraPosHost = wp.array(self.cameraPos, dtype=wp.vec3, device="cpu")
+        wp.copy(self.camera.pos, cameraPosHost)
+            
+    def moveCameraUp(self, distance:float=0.1) -> None:
+        self.cameraPos += wp.vec3(0.0, distance, 0.0)
+        cameraPosHost = wp.array(self.cameraPos, dtype=wp.vec3, device="cpu")
+        wp.copy(self.camera.pos, cameraPosHost)
+
+    def rotateCameraHV(self, distanceX:float=5.0, distanceY:float=5.0, scale:float=0.1) -> None:
+        self.cameraRot += wp.vec3(distanceX * scale * math.pi/180.0,
+                                  0.0,
+                                  distanceY * scale * math.pi/180.0)
+        # self.camera.rot = wp.quat_rpy(self.cameraRot[2], self.cameraRot[0], self.cameraRot[1])
+        cameraRotHost = wp.array(wp.quat_rpy(self.cameraRot[2], self.cameraRot[0], self.cameraRot[1]), dtype=wp.quat, device="cpu")
+        wp.copy(self.camera.rot, cameraRotHost)
+
+    def lookAt(self, at):
+        localAt = wp.normalize(at - self.camera.pos.numpy()[0])
+        pitch = wp.asin(localAt[1])
+        yaw = wp.atan2(localAt[0], localAt[2]) - math.pi
+
+        self.camera.at = at
+        self.cameraRot[2] = pitch
+        self.cameraRot[0] = yaw
+        # self.camera.rot = wp.quat_rpy(self.cameraRot[2], self.cameraRot[0], self.cameraRot[1])
+        cameraRotHost = wp.array(wp.quat_rpy(self.cameraRot[2], self.cameraRot[0], self.cameraRot[1]), dtype=wp.quat, device="cpu")
+        wp.copy(self.camera.rot, cameraRotHost)
+
+class WarpRaycastRenderer:
+
+    def __init__(self, device, simModel, cameraPos=[3.0, 3.0, 3.0], cameraRot=[0.0, 0.0, 0.0], resolution:int=512, mode="human"):
+
+        self.device=device
+        self.mode = mode
+
+        self.cameraPos = wp.vec3(cameraPos[0], cameraPos[1], cameraPos[2])
+        self.cameraRot = wp.vec3(cameraRot[0], cameraRot[1], cameraRot[2])
+
+        horizontal_aperture = 36.0
+        vertical_aperture = 20.25
+        aspect = horizontal_aperture / vertical_aperture
+        focal_length = 50.0
+        self.height = resolution
+        self.width = resolution
+        # self.width = int(aspect * self.height)
+        self.num_pixels = self.width * self.height
+
+        # set anti-aliasing
+        self.num_samples = 1
+
+        # set render mode
+        self.render_mode = RenderMode.texture
+
+        # construct camera
+        self.camera = Camera()
+        self.camera.horizontal = horizontal_aperture
+        self.camera.vertical = vertical_aperture
+        self.camera.aspect = aspect
+        self.camera.e = focal_length
+        self.camera.tan = vertical_aperture / (2.0 * focal_length)
+        self.camera.pos = self.cameraPos
+        self.camera.rot = wp.quat_rpy(self.cameraRot[2], self.cameraRot[0], self.cameraRot[1])
+
+        # construct lights
+        self.lights = DirectionalLights()
+        self.lights.dirs = wp.array(np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]), dtype=wp.vec3, device=self.device)
+        self.lights.intensities = wp.array(np.array([2.0, 0.2]), dtype=float, device=self.device)
+        self.lights.num_lights = 2
+
+        # construct rays
+        self.rays_width = self.width * pow(2, self.num_samples)
+        self.rays_height = self.height * pow(2, self.num_samples)
+        self.num_rays = self.rays_width * self.rays_height
+        self.rays = wp.zeros(self.num_rays, dtype=wp.vec3, device=self.device)
+
+        # construct pixels
+        self.pixels = wp.zeros(self.num_pixels, dtype=wp.vec3, device=self.device)
+
+        # manufacture texture for this asset
+        x = np.arange(256.0)
+        xx, yy = np.meshgrid(x, x)
+        zz = np.zeros_like(xx)
+        texture_host = np.stack((xx, yy, zz), axis=2) / 255.0
+
+        # construct texture
+        self.texture = wp.array2d(texture_host, dtype=wp.vec3, device=self.device)
+
+        # create plot window
+        if self.mode == "human":
+            plt.figure(figsize=(10, 10))
+            plt.axis("off")
+        self.img = None
+
+        # construct meshes
+        self.renderMesh = RenderMesh()
+        for simEnvironment in simModel.simEnvironments:
+            for simMesh in simEnvironment.simMeshes:
+
+                self.mesh = wp.Mesh(
+                    points=simMesh.visPoint,
+                    indices=simMesh.visFace
+                )
+
+                self.renderMesh.id = self.mesh.id
+                self.renderMesh.vertices = simMesh.visPoint
+                self.renderMesh.indices = simMesh.visFace
+                self.renderMesh.texCoords = simMesh.texCoords
+                self.renderMesh.texIndices = simMesh.texIndices
+                self.normalSums = wp.zeros(simMesh.numVisPoints, dtype=wp.vec3, device=self.device)
+                self.renderMesh.vertexNormals = wp.zeros(simMesh.numVisPoints, dtype=wp.vec3, device=self.device)
+                # self.renderMesh.pos = simMesh.translationWP
+                self.renderMesh.pos = wp.zeros(1, dtype=wp.vec3, device=self.device)
+                # self.renderMesh.rot = simMesh.rotationWP
+                self.renderMesh.rot = wp.array(np.array([0.0, 0.0, 0.0, 1.0]), dtype=wp.quat, device=self.device)
+                self.renderMesh.numTris = len(self.renderMesh.indices)
+
+                # compute vertex normals
+                wp.launch(
+                    kernel=vertex_normal_sum_kernel,
+                    dim=simMesh.numVisFaces,
+                    inputs=[self.renderMesh.vertices, self.renderMesh.indices, self.normalSums])
+                wp.launch(
+                    kernel=normalize_kernel,
+                    dim=simMesh.numVisPoints,
+                    inputs=[self.normalSums, self.renderMesh.vertexNormals])
+
+    def render(self, simBVH):
+
+        with wp.ScopedDevice("cuda:0"):
+
+            with wp.ScopedTimer("Render", active=True, detailed=False):
+            # raycast
+            
+                wp.launch(
+                    kernel=draw_kernel,
+                    dim=self.num_rays,
+                    inputs=[
+                        self.renderMesh,
+                        self.camera,
+                        self.texture,
+                        self.rays_width,
+                        self.rays_height,
+                        self.rays,
+                        self.lights,
+                        self.render_mode
+                    ])
+
+                # downsample
+                wp.launch(
+                    kernel=downsample_kernel,
+                    dim=self.num_pixels,
+                    inputs=[self.rays, self.pixels, self.rays_width, pow(2, self.num_samples)]
+                )
+
+        if self.mode == "human":
+            if self.img is None:
+                self.img = plt.imshow(self.pixels.numpy().reshape((self.height, self.width, 3)))
+            else:
+                self.img.set_data(self.pixels.numpy().reshape((self.height, self.width, 3)))
+            plt.pause(.1)
+            plt.draw()
+        else:
+            return self.pixels.numpy().reshape((self.height, self.width, 3))
             
     def moveCameraForward(self, distance:float=0.1) -> None:
         self.cameraPos += wp.vec3(0.0, 0.0, -distance)
