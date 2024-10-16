@@ -1,5 +1,3 @@
-![image](https://github.com/user-attachments/assets/96a1c3ca-c4c7-48cc-bca3-eb94bd9279ac)# FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning
-
 This repository contains the implemenation of the project "FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning"
 
 In this paper, we presented FF-SRL, a GPU-based simulation environment for robotic surgery that leverages an
