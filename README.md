@@ -1,5 +1,7 @@
 This repository contains the implemenation of the project "FF-SRL: High Performance GPU-Based Surgical Simulation For Robot Learning"
 
+[![arXiv](https://img.shields.io/badge/arXiv-2503.18616-b31b1b.svg)](https://arxiv.org/abs/2503.18616)
+
 In this paper, we presented FF-SRL, a GPU-based simulation environment for robotic surgery that leverages an
 advanced XPBD simulation of deformable tissue. We showed that FF-SRL can significantly speed up the RL training
 process for surgical tasks, achieving higher frame-rates and faster training time than other available simulators. We also
