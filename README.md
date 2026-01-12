@@ -51,6 +51,9 @@ In order to move the laparoscope use:
 * f to clamp the instrument effector
 * r to reset the environment
 
+## License
+FF-SRL is under ![Apache 2.0](https://github.com/SanoScience/FF-SRL/blob/main/LICENSE).
+
 ## Citing
 If you use the project in your work, please consider citing it with:
 ```bibtex
